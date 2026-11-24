@@ -8,6 +8,40 @@ comes first. Accounts add private pastes, a personal dashboard and a public prof
 
 ---
 
+## Notes for reviewers
+
+**Core requirements:** creating a paste, a unique shareable link, viewing it, time-based expiry and
+view-count expiry are all implemented. Expired, used-up and unknown pastes return `404`.
+View limits are enforced with a single atomic SQL statement, so they hold under concurrent requests
+(see [Enforcing view limits safely](#enforcing-view-limits-safely)).
+
+**Testing the API directly:** no login is needed for the core endpoints.
+
+```bash
+curl -s https://pastebin-lite-delta-three.vercel.app/api/healthz
+curl -s -H 'Content-Type: application/json' -d '{"content":"Hello","ttl_seconds":600,"max_views":3}' \
+  https://pastebin-lite-delta-three.vercel.app/api/pastes
+curl -s https://pastebin-lite-delta-three.vercel.app/api/pastes/<id>
+```
+
+With `TEST_MODE=1` (enabled on the deployment), the `x-test-now-ms` header sets the current time for
+expiry checks; see [Testing expiry deterministically](#testing-expiry-deterministically).
+
+**Beyond the brief:** a user account service (sign up, log in, log out with secure server-side
+sessions), private and password-protected pastes, editing and deleting your own pastes, a dashboard,
+a public archive with search, user profiles, syntax highlighting, and light/dark themes.
+On the website, creating a paste requires an account; the API keeps anonymous creation so the core
+behaviour can be tested without logging in. All account features can also be tested through the API:
+see [Testing accounts through the API](#testing-accounts-through-the-api).
+
+**Possible next steps:** if useful, I can add **JWT (token-based) authentication** for API clients
+alongside the session cookies, and **email verification** at sign-up with password reset by email.
+
+**Quality:** 93 automated tests, each run against both the PostgreSQL and in-memory stores
+(`npm test`; see [Tests](#tests)).
+
+---
+
 ## Features
 
 **Pastes**
