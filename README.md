@@ -147,6 +147,40 @@ header `x-paste-password: <password>`. A failed attempt does not count as a view
 
 Listing endpoints return summaries only (never the content) and **never count as views**.
 
+### Testing accounts through the API
+
+Every account feature can be exercised without the website. The session is a cookie, so `curl` keeps it
+in a cookie file (`-c` saves it, `-b` sends it):
+
+```bash
+BASE=https://pastebin-lite-delta-three.vercel.app
+
+# Sign up (also logs in). Use any new username/email.
+curl -s -c cookies.txt -H 'Content-Type: application/json' \
+  -d '{"username":"reviewer1","email":"reviewer1@example.com","password":"password123"}' \
+  $BASE/api/auth/signup
+
+# Create a private, titled paste as that user
+curl -s -b cookies.txt -H 'Content-Type: application/json' \
+  -d '{"content":"Hello","title":"Demo","language":"plaintext","visibility":"private"}' \
+  $BASE/api/pastes
+# -> {"id":"<ID>","url":"..."}
+
+curl -s $BASE/api/pastes/<ID>                      # anonymous: 404 (private)
+curl -s -b cookies.txt $BASE/api/pastes/<ID>       # owner: 200
+
+# Edit, list, delete (owner only)
+curl -s -b cookies.txt -X PATCH -H 'Content-Type: application/json' \
+  -d '{"content":"Hello again","visibility":"public"}' $BASE/api/pastes/<ID>
+curl -s -b cookies.txt $BASE/api/me/pastes
+curl -s -b cookies.txt -X DELETE -o /dev/null -w '%{http_code}\n' $BASE/api/pastes/<ID>   # 204
+
+# Log out
+curl -s -b cookies.txt -X POST -o /dev/null -w '%{http_code}\n' $BASE/api/auth/logout    # 204
+```
+
+Requests without a session behave exactly as in the core API: anonymous `POST /api/pastes` still works.
+
 ### Testing expiry deterministically
 
 When the server runs with `TEST_MODE=1`, the request header `x-test-now-ms: <epoch milliseconds>` is used
