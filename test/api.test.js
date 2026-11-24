@@ -264,6 +264,24 @@ for (const [name, makeStore] of backends) {
         assert.equal((await request(app).get(`/p/${id}`).set('x-test-now-ms', String(t0 + 5000))).status, 404);
       });
 
+      test('only the page\'s own script is allowed: CSP hash matches it exactly', async () => {
+        const { createHash } = await import('node:crypto');
+        const id = await newPaste({ content: '<script>evil()</script>' });
+        const res = await request(app).get(`/p/${id}`);
+        const scripts = [...res.text.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+        assert.equal(scripts.length, 1);
+        const hash = createHash('sha256').update(scripts[0]).digest('base64');
+        assert.ok(res.headers['content-security-policy'].includes(`script-src 'sha256-${hash}'`));
+      });
+
+      test('uses the theme cookie, ignoring unknown values', async () => {
+        const id = await newPaste({ content: 'x' });
+        const dark = await request(app).get(`/p/${id}`).set('Cookie', 'foo=1; theme=dark');
+        assert.match(dark.text, /<html lang="en" data-theme="dark">/);
+        const bogus = await request(app).get('/p/doesnotexist').set('Cookie', 'theme="><script>');
+        assert.match(bogus.text, /<html lang="en">/);
+      });
+
       test('returns 404 for unknown id', async () => {
         assert.equal((await request(app).get('/p/doesnotexist')).status, 404);
       });

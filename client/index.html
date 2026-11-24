@@ -6,6 +6,13 @@
     <meta name="description" content="Share text quickly with a link. Optional expiry by time or number of views." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>Pastebin Lite</title>
+    <script>
+      // Apply the saved theme before first paint to avoid a flash of the wrong theme.
+      (function () {
+        var m = document.cookie.match(/(?:^|;\s*)theme=(light|dark)/);
+        if (m) document.documentElement.setAttribute('data-theme', m[1]);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
