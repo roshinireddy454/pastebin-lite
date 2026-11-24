@@ -5,6 +5,8 @@
   "outputDirectory": "client/dist",
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api" },
-    { "source": "/p/:id", "destination": "/api" }
+    { "source": "/p/:id", "destination": "/api" },
+    { "source": "/raw/:id", "destination": "/api" },
+    { "source": "/:path*", "destination": "/index.html" }
   ]
 }

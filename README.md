@@ -1,8 +1,8 @@
 # Pastebin Lite
 
-A small, fast web application for sharing text through a link. Paste any text, get a unique URL, and
-optionally have the paste expire **after a set time**, **after a number of views**, or both, whichever
-comes first.
+A full-stack web application for sharing text and code through a link. Paste anything, get a unique URL,
+and optionally have the paste expire **after a set time**, **after a number of views**, or both, whichever
+comes first. Accounts add private pastes, a personal dashboard and a public profile.
 
 **Live demo:** https://pastebin-lite-delta-three.vercel.app
 
@@ -10,21 +10,39 @@ comes first.
 
 ## Features
 
-- **Create and share**: store any text (up to 512 KB) and get an unguessable, shareable link.
-- **Time-based expiry**: the paste becomes unavailable after a chosen duration.
-- **View-based expiry**: the paste becomes unavailable after a chosen number of views.
-- **Combined limits**: whichever limit is reached first applies.
+**Pastes**
+- **Create and share**: store any text (up to 512 KB) and get an unguessable, shareable link. No account needed.
+- **Time-based expiry**: presets (10 minutes to 1 week) or any custom duration.
+- **View-based expiry**: a maximum number of views, including one-click **burn after read**.
 - **Correct under concurrency**: a view limit is never exceeded, even when many requests arrive at the same moment.
-- **Safe rendering**: pasted HTML or scripts are always shown as plain text and never executed.
-- **Light and dark themes**: follows the system setting, with a toggle that is remembered across pages.
-- **Responsive UI**: works on desktop and mobile.
+- **Titles and syntax highlighting** for 23 languages, with line numbers.
+- **Visibility**: *unlisted* (link only, the default), *public* (listed in the archive) or *private* (owner only).
+- **Password protection**: viewers must enter a password; failed attempts don't use up views.
+- **Paste tools**: copy, download, raw text view, and *clone* into a new paste.
+- **Editing**: owners can change the title, content, language, visibility and password. Expiry and
+  view limits are fixed at creation, and edits never reset or use up views.
+
+**Accounts**
+- **Sign up / log in / log out** with secure, server-side sessions.
+- **Guests can view, members create**: anyone with a link can view a paste; creating, editing and deleting
+  on the website requires an account, so every paste made there has an owner who can manage it.
+- **Dashboard**: all your pastes with views, expiry and status (active, expired, views used up), with stats, edit and delete.
+- **Public profile** at `/u/<username>` listing a user's public pastes.
+- **Public archive** of recent public pastes, with search.
+
+**Experience and security**
+- **Safe rendering**: pasted HTML or scripts are always shown as text and never executed.
+- **Light and dark themes**: follows the system setting, with a toggle remembered across pages.
+- **Responsive UI** for desktop and mobile.
 
 ## Tech stack
 
 | Layer | Technology | Why |
 | --- | --- | --- |
 | Backend | Node.js, Express | Small, well-understood HTTP layer with explicit routing and error handling |
-| Frontend | React, Vite | Fast to build and load; the UI is a single interactive form |
+| Frontend | React, React Router, Vite | Component-based UI with client-side routing; fast builds |
+| Syntax highlighting | highlight.js (server-side) | Paste pages work without client-side JavaScript |
+| Auth | Server-side sessions, scrypt | No extra dependencies; sessions can be revoked instantly |
 | Database | PostgreSQL (Neon) | Transactions and row-level locking make view counting reliable |
 | Hosting | Vercel | Static frontend on the CDN, Express API as a serverless function |
 | Tests | Node.js test runner, Supertest | No extra framework; tests exercise the real HTTP layer |
@@ -97,6 +115,38 @@ GET /p/:id
 Returns a server-rendered HTML page with the paste content (also counts as one view), or a
 "Paste not available" page with status `404`.
 
+### Optional fields when creating a paste
+
+All of these are optional. Requests that only send `content`, `ttl_seconds` and `max_views` behave exactly as described above.
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `title` | string | Up to 100 characters. |
+| `language` | string | One of the supported language ids (e.g. `python`, `javascript`), default `plaintext`. |
+| `visibility` | string | `unlisted` (default), `public`, or `private` (requires login). |
+| `password` | string | Up to 128 characters. Required to view the paste. |
+
+For a password-protected paste, `GET /api/pastes/:id` returns `401` unless the request includes the
+header `x-paste-password: <password>`. A failed attempt does not count as a view.
+
+### Accounts and listings
+
+| Method & path | Description |
+| --- | --- |
+| `POST /api/auth/signup` | `{ username, email, password }`. Creates an account and logs in. `409` if taken. |
+| `POST /api/auth/login` | `{ login, password }`, where `login` is a username or email. |
+| `POST /api/auth/logout` | Ends the session. |
+| `GET /api/auth/me` | `{ user }`, or `{ user: null }` when logged out. |
+| `GET /api/me/pastes?page=N` | Your pastes, including expired ones, plus totals. Requires login. |
+| `GET /api/pastes/:id/edit` | Full paste data for the edit form (owner only; doesn't count as a view). |
+| `PATCH /api/pastes/:id` | Edit your paste: any of `title`, `content`, `language`, `visibility`, `password` (`null` removes it). Requires login. |
+| `DELETE /api/pastes/:id` | Delete one of your pastes. Requires login. |
+| `GET /api/public/pastes?q=&page=N` | Public archive: active public pastes, newest first, searchable by title. |
+| `GET /api/users/:username` | A user's profile and public pastes. |
+| `GET /raw/:id` | The paste as plain text (counts as a view). Add `?download=1` to download it. |
+
+Listing endpoints return summaries only (never the content) and **never count as views**.
+
 ### Testing expiry deterministically
 
 When the server runs with `TEST_MODE=1`, the request header `x-test-now-ms: <epoch milliseconds>` is used
@@ -109,21 +159,27 @@ expiry without waiting. Without `TEST_MODE=1`, the header is ignored.
 
 ### Data model
 
-A single table:
-
 ```sql
-CREATE TABLE pastes (
-  id          VARCHAR(16) PRIMARY KEY,
-  content     TEXT        NOT NULL,
-  created_at  TIMESTAMPTZ NOT NULL,
-  expires_at  TIMESTAMPTZ,              -- NULL = never expires
-  max_views   INTEGER,                  -- NULL = unlimited views
-  view_count  INTEGER     NOT NULL DEFAULT 0
-);
+users    (id, username, email, password_hash, created_at)
+         -- unique indexes on lower(username) and lower(email)
+sessions (token_hash PRIMARY KEY, user_id → users, created_at, expires_at)
+pastes   (id PRIMARY KEY, content, created_at,
+          expires_at,          -- NULL = never expires
+          max_views,           -- NULL = unlimited views
+          view_count,
+          title, language,
+          visibility,          -- 'unlisted' | 'public' | 'private'
+          password_hash,       -- NULL = no password
+          user_id → users)     -- NULL = created anonymously
 ```
 
 `expires_at` is computed once at creation (`created_at + ttl_seconds`), so checking expiry is a single
-comparison. The table is created automatically on first use.
+comparison. Partial and composite indexes serve the archive (`created_at` where public) and the
+dashboard (`user_id, created_at`).
+
+The schema is created and upgraded automatically on startup with idempotent statements
+(`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`), run under a Postgres advisory lock so that
+several serverless instances starting at once don't race each other.
 
 ### Generating unique links
 
@@ -157,6 +213,44 @@ Verified under load: 200 simultaneous requests for a paste with `max_views = 10`
 
 Because the expiry check is part of the same condition, requests for an expired paste never use up views.
 
+### Access control
+
+Opening a paste runs the access rules **before** any view is counted:
+
+1. Missing, expired or used up → `404`.
+2. Private, and the viewer isn't the owner → `404`, the same response as a missing paste, so its existence isn't revealed.
+3. Password-protected, and the viewer isn't the owner → `401` until the right password is supplied.
+   Passwords are checked against a scrypt hash, and attempts are rate-limited.
+4. Only then is the view recorded with the atomic `UPDATE` above. If a concurrent request took the last
+   view in between, the update matches no row and the result is `404`.
+
+### Accounts and sessions
+
+- Passwords are hashed with **scrypt** (memory-hard, built into Node.js), using a random salt per password
+  and a constant-time comparison.
+- Logging in creates a random 256-bit session token, sent in an **HttpOnly, SameSite=Lax** cookie
+  (`Secure` over HTTPS). JavaScript can't read it, and the browser won't send it on cross-site form posts,
+  which protects the state-changing endpoints against CSRF.
+- The database stores only the **SHA-256 hash** of each token, so a leaked database contains no usable sessions.
+  Sessions are server-side, so logging out revokes them immediately.
+- A failed login returns the same message whether or not the user exists, and takes the same time
+  (a dummy hash check), so accounts can't be discovered. Login attempts are rate-limited per IP and account.
+- After login, redirects only go to paths on this site (no open redirects).
+
+### Website vs. API: who can create pastes
+
+The website asks visitors to log in before creating a paste, and editing or deleting always requires
+being the owner. The public `POST /api/pastes` endpoint still accepts anonymous requests, because it is
+the documented integration API (scripts, CLI tools and automated tests create pastes without a browser
+session). Anonymous pastes have no owner, so nobody can edit or delete them; they simply expire.
+
+### Editing
+
+Only the owner can edit, and only while the paste is still active. The update runs as one `UPDATE … WHERE
+id = $1 AND user_id = $2 AND <still active>`, so ownership and availability are checked atomically.
+Expiry time, view limit and view count are deliberately not editable: they are a promise to the people the
+link was shared with (for example, "this can be read once"). Edits set `updated_at`, shown as "Edited" on the paste page.
+
 ### Expiry
 
 Expiry is checked when a paste is read, not by a background job. This keeps the system simple and fits
@@ -170,9 +264,10 @@ cached copy, bypassing both the view counter and expiry.
 
 ### Security
 
-- Paste content is HTML-escaped on the server before rendering.
+- Paste content is HTML-escaped on the server (or by highlight.js when highlighting) before rendering.
 - The paste page sends a strict Content-Security-Policy. The only script allowed is the page's own
-  theme/copy script, identified by its SHA-256 hash, so nothing inside a paste can ever execute.
+  script (theme toggle, copy, download, clone), identified by its SHA-256 hash, so nothing inside a paste
+  can ever execute. The raw endpoint is served as `text/plain` with a sandboxing CSP.
 - `HEAD` requests to paste URLs return `405`, so link checkers and chat-app link previews cannot use up views.
 - Input is validated strictly: values like `"10"` or `1.5` are rejected rather than silently converted,
   and request bodies are size-limited.
@@ -198,14 +293,20 @@ src/
   server.js               Standalone server entry point (local / Render / Railway)
   app.js                  Express app: middleware, routing, error handling
   config.js               Environment configuration and limits
-  pastes.js               Core logic: create and view pastes
-  routes/api.js           /api/healthz, /api/pastes, /api/pastes/:id
-  routes/pasteView.js     /p/:id HTML page
-  views/pasteHtml.js      HTML rendering for the paste page
-  db/                     PostgreSQL and in-memory stores
-  lib/                    ID generation, validation, time handling, errors
-client/                   React frontend (Vite)
-test/api.test.js          API, edge-case and concurrency tests
+  pastes.js               Core logic: create, access rules, view counting
+  auth.js                 Sessions: cookie handling, loading the current user
+  routes/api.js           Paste API, listings, delete
+  routes/auth.js          Sign up, log in, log out
+  routes/pasteView.js     /p/:id (HTML + password form) and /raw/:id
+  views/pasteHtml.js      Server-rendered paste pages
+  db/                     PostgreSQL and in-memory stores (same interface)
+  lib/                    Validation, passwords, IDs, languages, rate limiting, time
+client/src/
+  pages/                  Create, edit, log in / sign up, dashboard, archive, profile
+  components/             Layout (navigation, user menu), shared form fields, paste lists
+test/
+  api.test.js             Core API contract, edge cases and concurrency
+  features.test.js        Accounts, visibility, passwords, listings, editing, delete, raw, highlighting
 vercel.json               Vercel build and routing configuration
 ```
 
@@ -252,7 +353,7 @@ npm test                                                        # in-memory stor
 TEST_DATABASE_URL=postgres://user:pass@localhost/db npm test    # also against PostgreSQL
 ```
 
-The suite has 47 tests, run against each storage backend. They cover:
+The suite has 93 tests, run against each storage backend. They cover:
 
 - creating and fetching pastes, with exact content preservation (Unicode, whitespace, HTML)
 - input validation (missing, empty or wrongly typed fields, out-of-range values, malformed JSON, oversized bodies)
@@ -260,7 +361,12 @@ The suite has 47 tests, run against each storage backend. They cover:
 - time expiry at the exact boundary, using `x-test-now-ms`
 - combined limits, where whichever is reached first applies
 - concurrency (40 parallel requests never exceed `max_views`)
-- HTML escaping, the Content-Security-Policy, the theme cookie and `HEAD` handling
+- accounts: sign-up validation, case-insensitive uniqueness, login by username or email, logout,
+  identical errors for unknown users, rate limiting, forged cookies
+- private pastes (owner only), password protection (API and HTML form; failed attempts don't use views)
+- dashboard, archive (visibility filtering, search with literal `%` and `_`), profiles, and owner-only delete
+- editing: owner-only, doesn't use views, adding/removing passwords, no edits to expired or anonymous pastes
+- raw view and download, syntax highlighting with line numbers, HTML escaping, CSP script hash, `HEAD` handling
 
 ---
 

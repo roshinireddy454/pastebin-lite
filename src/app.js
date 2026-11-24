@@ -1,8 +1,10 @@
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { sessionMiddleware } from './auth.js';
 import { HttpError } from './lib/errors.js';
 import { apiRouter } from './routes/api.js';
+import { authRouter } from './routes/auth.js';
 import { pageRouter } from './routes/pasteView.js';
 
 const CLIENT_DIST = fileURLToPath(new URL('../client/dist', import.meta.url));
@@ -10,16 +12,20 @@ const CLIENT_DIST = fileURLToPath(new URL('../client/dist', import.meta.url));
 export function createApp(store) {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', true); // behind Vercel/Render proxies: honour X-Forwarded-Proto/Host for share URLs
+  app.set('trust proxy', true); // behind Vercel/Render proxies: honour X-Forwarded-* for URLs and secure cookies
 
   app.use((req, res, next) => {
-    res.set('X-Content-Type-Options', 'nosniff');
+    res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' });
     next();
   });
 
   // Headroom above the content limit, since JSON escaping can grow the body.
   app.use('/api', express.json({ limit: '2mb' }));
+  app.use(sessionMiddleware(store));
+
+  app.use('/api/auth', authRouter(store));
   app.use('/api', apiRouter(store));
+  app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
   app.use(pageRouter(store));
 
   // Serve the built React app when it exists (Render/Railway/local). On Vercel, static files are served by the CDN.
@@ -36,6 +42,7 @@ export function createApp(store) {
     let message = 'Internal server error';
     if (err instanceof HttpError) {
       ({ status, message } = err);
+      if (err.retryAfter) res.set('Retry-After', String(err.retryAfter));
     } else if (err.type === 'entity.parse.failed') {
       status = 400;
       message = 'Malformed JSON body';

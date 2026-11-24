@@ -4,17 +4,22 @@
   "private": true,
   "description": "Share text via a link, with optional expiry by time or view count.",
   "type": "module",
-  "workspaces": ["client"],
-  "engines": { "node": ">=18" },
+  "workspaces": [
+    "client"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "node --watch src/server.js",
     "dev:client": "npm run dev -w client",
     "build": "npm run build -w client",
     "start": "node src/server.js",
-    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\""
+    "test": "node --test --test-concurrency=1 test/api.test.js test/features.test.js"
   },
   "dependencies": {
     "express": "^4.21.2",
+    "highlight.js": "^11.12.0",
     "pg": "^8.13.1"
   },
   "devDependencies": {
